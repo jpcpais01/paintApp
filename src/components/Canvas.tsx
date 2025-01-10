@@ -10,17 +10,6 @@ interface CanvasProps {
 
 type Tool = 'brush' | 'bucket';
 
-function debounce<T extends (...args: any[]) => any>(
-  func: T,
-  wait: number
-): (...args: Parameters<T>) => void {
-  let timeout: NodeJS.Timeout;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
-  };
-}
-
 export default function Canvas({ imageUrl, onStateChange, onHistoryChange }: CanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -272,6 +261,28 @@ export default function Canvas({ imageUrl, onStateChange, onHistoryChange }: Can
   };
 
   useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleRedo, handleUndo]);
+
+  useEffect(() => {
+    if (!contextRef.current) return;
+    contextRef.current.strokeStyle = currentColor;
+    contextRef.current.lineWidth = brushSize;
+    saveState();
+  }, [brushSize, currentColor, saveState]);
+
+  useEffect(() => {
     window.handleUndo = handleUndo;
     window.handleRedo = handleRedo;
 
@@ -279,7 +290,7 @@ export default function Canvas({ imageUrl, onStateChange, onHistoryChange }: Can
       window.handleUndo = undefined;
       window.handleRedo = undefined;
     };
-  }, [onHistoryChange]);
+  }, [onHistoryChange, handleRedo, handleUndo]);
 
   // Initialize canvas
   useEffect(() => {
@@ -323,7 +334,7 @@ export default function Canvas({ imageUrl, onStateChange, onHistoryChange }: Can
       };
       img.src = imageUrl;
     }
-  }, [imageUrl]);
+  }, [imageUrl, brushSize, currentColor]);
 
   return (
     <div className="relative w-full h-[calc(100vh-11rem)] sm:h-[calc(100vh-13rem)] bg-white/90 backdrop-blur-sm rounded-xl shadow-xl overflow-hidden">

@@ -2,12 +2,13 @@
 
 import { useState, useCallback, useRef } from 'react';
 import Canvas from '@/components/Canvas';
+import Image from 'next/image';
 
 export default function Home() {
   const [selectedImage, setSelectedImage] = useState<string>('');
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
-  const [currentTool, setCurrentTool] = useState<'brush' | 'bucket'>('brush');
+  const [currentTool] = useState<'brush' | 'bucket'>('brush');
   const downloadRef = useRef<string>(selectedImage);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -125,9 +126,11 @@ export default function Home() {
           {!selectedImage ? (
             <div className="flex flex-col items-center justify-center p-8 bg-[#1e293b]/50 backdrop-blur-sm rounded-2xl shadow-2xl shadow-black/20 border border-white/5 h-[calc(100vh-7rem)] sm:h-[calc(100vh-8rem)]">
               <div className="mb-8">
-                <img 
+                <Image 
                   src="/coloring-illustration.svg" 
                   alt="Upload illustration" 
+                  width={160}
+                  height={160}
                   className="w-32 sm:w-40 h-32 sm:h-40 opacity-30 transition-all hover:opacity-40"
                 />
               </div>
