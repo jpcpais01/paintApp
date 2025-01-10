@@ -172,8 +172,8 @@ export default function Canvas({ imageUrl, onStateChange, onHistoryChange }: Can
     setIsDrawing(false);
     if (contextRef.current) {
       contextRef.current.closePath();
+      saveState(); // Only save state when drawing is complete
     }
-    saveState();
   };
 
   const floodFill = (startX: number, startY: number) => {
@@ -279,8 +279,7 @@ export default function Canvas({ imageUrl, onStateChange, onHistoryChange }: Can
     if (!contextRef.current) return;
     contextRef.current.strokeStyle = currentColor;
     contextRef.current.lineWidth = brushSize;
-    saveState();
-  }, [brushSize, currentColor, saveState]);
+  }, [brushSize, currentColor]);
 
   useEffect(() => {
     window.handleUndo = handleUndo;
@@ -330,7 +329,11 @@ export default function Canvas({ imageUrl, onStateChange, onHistoryChange }: Can
           img.width * scale,
           img.height * scale
         );
-        saveState();
+        
+        // Only save initial state when loading a new image
+        if (currentStateIndex.current === -1) {
+          saveState();
+        }
       };
       img.src = imageUrl;
     }

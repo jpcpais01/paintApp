@@ -53,12 +53,29 @@ export default function Home() {
   }, []);
 
   const handleDownload = () => {
-    const link = document.createElement('a');
-    link.download = 'colored-image.png';
-    link.href = downloadRef.current;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const canvas = document.querySelector('canvas');
+    if (!canvas) return;
+    
+    // Convert the canvas to a blob
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      
+      // Create a URL for the blob
+      const url = window.URL.createObjectURL(blob);
+      
+      // Create a temporary link element
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'my-coloring-page.png'; // Set the filename
+      
+      // Append to body, click, and remove
+      document.body.appendChild(link);
+      link.click();
+      
+      // Clean up
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    }, 'image/png');
   };
 
   return (
