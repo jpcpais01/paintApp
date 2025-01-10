@@ -5,11 +5,23 @@ import { useEffect, useRef, useState } from 'react';
 interface CanvasProps {
   imageUrl: string;
   onStateChange?: (state: string) => void;
+  onHistoryChange?: (canUndo: boolean, canRedo: boolean) => void;
 }
 
 type Tool = 'brush' | 'bucket';
 
-export default function Canvas({ imageUrl, onStateChange }: CanvasProps) {
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+}
+
+export default function Canvas({ imageUrl, onStateChange, onHistoryChange }: CanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentColor, setCurrentColor] = useState('#000000');
@@ -20,159 +32,159 @@ export default function Canvas({ imageUrl, onStateChange }: CanvasProps) {
   const [lastY, setLastY] = useState(0);
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const isFirstDraw = useRef(true);
-  const drawTimeout = useRef<NodeJS.Timeout>();
+  const historyStates = useRef<ImageData[]>([]);
+  const currentStateIndex = useRef<number>(-1);
 
-  const saveCurrentState = () => {
+  const saveState = () => {
     const canvas = canvasRef.current;
-    if (!canvas || !onStateChange) {
-      return; // Early return if either canvas or onStateChange is not available
+    const ctx = contextRef.current;
+    if (!canvas || !ctx) return;
+
+    if (isFirstDraw.current) {
+      isFirstDraw.current = false;
+      return;
     }
 
-    // Clear any pending save
-    if (drawTimeout.current) {
-      clearTimeout(drawTimeout.current);
+    const currentState = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // Check if the new state is different from the last state
+    const lastState = historyStates.current[currentStateIndex.current];
+    if (lastState) {
+      const isEqual = currentState.data.every((val, i) => val === lastState.data[i]);
+      if (isEqual) return;
     }
-    // Save the state after a short delay to avoid too frequent saves
-    drawTimeout.current = setTimeout((_: any) => {
-      if (canvasRef.current) {
-        onStateChange(canvasRef.current.toDataURL());
-      }
-    }, 300);
+
+    if (currentStateIndex.current < historyStates.current.length - 1) {
+      historyStates.current = historyStates.current.slice(0, currentStateIndex.current + 1);
+    }
+
+    historyStates.current.push(currentState);
+    currentStateIndex.current++;
+
+    const maxStates = 50;
+    if (historyStates.current.length > maxStates) {
+      historyStates.current = historyStates.current.slice(-maxStates);
+      currentStateIndex.current = historyStates.current.length - 1;
+    }
+
+    onHistoryChange?.(currentStateIndex.current > 0, false);
+    
+    // Only update parent state, no visual changes needed
+    if (onStateChange && canvas) {
+      onStateChange(canvas.toDataURL());
+    }
   };
 
-  useEffect(() => {
-    return () => {
-      if (drawTimeout.current) {
-        clearTimeout(drawTimeout.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
+  const handleUndo = () => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const ctx = contextRef.current;
+    if (!canvas || !ctx || currentStateIndex.current <= 0) return;
 
-    const context = canvas.getContext('2d');
-    if (!context) return;
+    currentStateIndex.current--;
+    const previousState = historyStates.current[currentStateIndex.current];
+    ctx.putImageData(previousState, 0, 0);
 
-    // Make canvas responsive
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
+    onHistoryChange?.(currentStateIndex.current > 0, true);
+    if (onStateChange) {
+      onStateChange(canvas.toDataURL());
+    }
+  };
 
-    context.lineCap = 'round';
-    context.strokeStyle = currentColor;
-    context.lineWidth = brushSize;
-    contextRef.current = context;
+  const handleRedo = () => {
+    const canvas = canvasRef.current;
+    const ctx = contextRef.current;
+    if (!canvas || !ctx || currentStateIndex.current >= historyStates.current.length - 1) return;
 
-    // Load background image
-    const image = new Image();
-    image.src = imageUrl;
-    image.onload = () => {
-      // Clear the canvas first
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // Scale image to fit canvas while maintaining aspect ratio
-      const scale = Math.min(
-        canvas.width / image.width,
-        canvas.height / image.height
-      );
-      const x = (canvas.width - image.width * scale) / 2;
-      const y = (canvas.height - image.height * scale) / 2;
-      
-      context.drawImage(
-        image,
-        x,
-        y,
-        image.width * scale,
-        image.height * scale
-      );
+    currentStateIndex.current++;
+    const nextState = historyStates.current[currentStateIndex.current];
+    ctx.putImageData(nextState, 0, 0);
 
-      // Only save initial state if this is the first load
-      if (isFirstDraw.current) {
-        isFirstDraw.current = false;
-        saveCurrentState();
-      }
-    };
-  }, [imageUrl]);
+    onHistoryChange?.(true, currentStateIndex.current < historyStates.current.length - 1);
+    if (onStateChange) {
+      onStateChange(canvas.toDataURL());
+    }
+  };
 
-  const getCoordinates = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  const getCoordinates = (e: React.MouseEvent | React.TouchEvent) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
 
     const rect = canvas.getBoundingClientRect();
-    const x = ('touches' in e)
-      ? e.touches[0].clientX - rect.left
-      : e.clientX - rect.left;
-    const y = ('touches' in e)
-      ? e.touches[0].clientY - rect.top
-      : e.clientY - rect.top;
-    
-    // Scale coordinates based on canvas size
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    
-    return { 
-      x: x * scaleX,
-      y: y * scaleY
-    };
+    let x, y;
+
+    if ('touches' in e) {
+      x = e.touches[0].clientX - rect.left;
+      y = e.touches[0].clientY - rect.top;
+    } else {
+      x = e.clientX - rect.left;
+      y = e.clientY - rect.top;
+    }
+
+    // Scale coordinates
+    x = (x * canvas.width) / rect.width;
+    y = (y * canvas.height) / rect.height;
+
+    return { x, y };
   };
 
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    const { x, y } = getCoordinates(e);
+
     if (currentTool === 'bucket') {
-      const { x, y } = getCoordinates(e);
       floodFill(Math.round(x), Math.round(y));
       return;
     }
 
     setIsDrawing(true);
-    const { x, y } = getCoordinates(e);
     setLastX(x);
     setLastY(y);
 
-    const canvas = canvasRef.current;
-    if (!canvas || !contextRef.current) return;
-
-    contextRef.current.beginPath();
-    contextRef.current.moveTo(x, y);
+    if (contextRef.current) {
+      contextRef.current.beginPath();
+      contextRef.current.moveTo(x, y);
+      contextRef.current.lineTo(x, y);
+      contextRef.current.stroke();
+      contextRef.current.closePath();
+    }
   };
 
-  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !contextRef.current || !canvasRef.current || currentTool === 'bucket') return;
-
+  const draw = (e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault();
+    if (!isDrawing || currentTool !== 'brush' || !contextRef.current) return;
+
     const { x, y } = getCoordinates(e);
 
-    contextRef.current.globalCompositeOperation = 'source-over';
-    contextRef.current.strokeStyle = currentColor;
-
-    // For smoother lines, especially on mobile
+    // For smoother lines
     const dx = x - lastX;
     const dy = y - lastY;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    const steps = Math.max(Math.floor(distance / 2), 1);
-    
-    for (let i = 0; i < steps; i++) {
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const steps = Math.max(Math.floor(dist / 2), 1);
+
+    contextRef.current.beginPath();
+    contextRef.current.moveTo(lastX, lastY);
+
+    for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const cx = lastX + dx * t;
       const cy = lastY + dy * t;
       contextRef.current.lineTo(cx, cy);
-      contextRef.current.stroke();
     }
+    
+    contextRef.current.stroke();
+    contextRef.current.closePath();
 
     setLastX(x);
     setLastY(y);
   };
 
   const stopDrawing = () => {
-    if (isDrawing) {
-      setIsDrawing(false);
-      if (contextRef.current) {
-        contextRef.current.closePath();
-        saveCurrentState();
-      }
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    if (contextRef.current) {
+      contextRef.current.closePath();
     }
+    saveState();
   };
 
   const floodFill = (startX: number, startY: number) => {
@@ -180,76 +192,126 @@ export default function Canvas({ imageUrl, onStateChange }: CanvasProps) {
     const ctx = contextRef.current;
     if (!canvas || !ctx) return;
 
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // Create a temporary canvas
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = canvas.width;
+    tempCanvas.height = canvas.height;
+    const tempCtx = tempCanvas.getContext('2d');
+    if (!tempCtx) return;
+
+    // Copy current canvas state to temp canvas
+    tempCtx.drawImage(canvas, 0, 0);
+
+    const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
     const pixels = imageData.data;
 
-    // Get the color we're filling
     const startPos = (startY * canvas.width + startX) * 4;
     const startR = pixels[startPos];
     const startG = pixels[startPos + 1];
     const startB = pixels[startPos + 2];
-    const startA = pixels[startPos + 3];
 
-    // Convert current color from hex to rgba
-    const fillColor = {
-      r: parseInt(currentColor.slice(1, 3), 16),
-      g: parseInt(currentColor.slice(3, 5), 16),
-      b: parseInt(currentColor.slice(5, 7), 16),
-      a: 255
-    };
+    const fillR = parseInt(currentColor.slice(1, 3), 16);
+    const fillG = parseInt(currentColor.slice(3, 5), 16);
+    const fillB = parseInt(currentColor.slice(5, 7), 16);
 
-    function matchesStartColor(pos: number) {
-      return (
-        Math.abs(pixels[pos] - startR) <= tolerance &&
-        Math.abs(pixels[pos + 1] - startG) <= tolerance &&
-        Math.abs(pixels[pos + 2] - startB) <= tolerance &&
-        Math.abs(pixels[pos + 3] - startA) <= tolerance
-      );
+    if (
+      startR === fillR &&
+      startG === fillG &&
+      startB === fillB
+    ) {
+      return;
     }
 
-    function colorPixel(pos: number) {
-      pixels[pos] = fillColor.r;
-      pixels[pos + 1] = fillColor.g;
-      pixels[pos + 2] = fillColor.b;
-      pixels[pos + 3] = fillColor.a;
-    }
+    const visited = new Uint8Array(canvas.width * canvas.height);
+    const stack: [number, number][] = [[startX, startY]];
 
-    const pixelsToCheck = [startPos];
-    while (pixelsToCheck.length > 0) {
-      const currentPos = pixelsToCheck.pop()!;
-      if (!matchesStartColor(currentPos)) continue;
+    while (stack.length) {
+      const [x, y] = stack.pop()!;
+      const pos = (y * canvas.width + x) * 4;
+      const visitedPos = y * canvas.width + x;
 
-      const currentX = (currentPos / 4) % canvas.width;
-      const currentY = Math.floor((currentPos / 4) / canvas.width);
-
-      colorPixel(currentPos);
-
-      // Check neighboring pixels
-      if (currentX > 0) { // left
-        const pos = currentPos - 4;
-        if (matchesStartColor(pos)) pixelsToCheck.push(pos);
+      if (
+        x < 0 || x >= canvas.width ||
+        y < 0 || y >= canvas.height ||
+        visited[visitedPos] === 1 ||
+        pixels[pos + 3] === 0 ||
+        pixels[pos] === fillR && pixels[pos + 1] === fillG && pixels[pos + 2] === fillB
+      ) {
+        continue;
       }
-      if (currentX < canvas.width - 1) { // right
-        const pos = currentPos + 4;
-        if (matchesStartColor(pos)) pixelsToCheck.push(pos);
-      }
-      if (currentY > 0) { // up
-        const pos = currentPos - canvas.width * 4;
-        if (matchesStartColor(pos)) pixelsToCheck.push(pos);
-      }
-      if (currentY < canvas.height - 1) { // down
-        const pos = currentPos + canvas.width * 4;
-        if (matchesStartColor(pos)) pixelsToCheck.push(pos);
+
+      visited[visitedPos] = 1;
+
+      const r = pixels[pos];
+      const g = pixels[pos + 1];
+      const b = pixels[pos + 2];
+
+      if (
+        Math.abs(r - startR) <= tolerance &&
+        Math.abs(g - startG) <= tolerance &&
+        Math.abs(b - startB) <= tolerance
+      ) {
+        pixels[pos] = fillR;
+        pixels[pos + 1] = fillG;
+        pixels[pos + 2] = fillB;
+
+        stack.push([x + 1, y], [x, y + 1], [x - 1, y], [x, y - 1]);
       }
     }
 
-    ctx.putImageData(imageData, 0, 0);
-    saveCurrentState();
+    // Update temp canvas with fill result
+    tempCtx.putImageData(imageData, 0, 0);
+    
+    // Draw temp canvas to main canvas in one operation
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tempCanvas, 0, 0);
+    
+    // Clean up
+    tempCanvas.remove();
+    saveState();
   };
+
+  useEffect(() => {
+    window.handleUndo = handleUndo;
+    window.handleRedo = handleRedo;
+
+    return () => {
+      window.handleUndo = undefined;
+      window.handleRedo = undefined;
+    };
+  }, [onHistoryChange]);
+
+  // Initialize canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = brushSize;
+    ctx.strokeStyle = currentColor;
+    contextRef.current = ctx;
+
+    if (imageUrl) {
+      const img = new Image();
+      img.onload = () => {
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        saveState();
+      };
+      img.src = imageUrl;
+    }
+  }, [imageUrl]);
 
   return (
     <div className="relative w-full h-[calc(100vh-11rem)] sm:h-[calc(100vh-13rem)] bg-white/90 backdrop-blur-sm rounded-xl shadow-xl overflow-hidden">
-      {/* Tools panel - sticky on mobile, floating on desktop */}
       <div className="fixed bottom-0 left-0 right-0 sm:absolute sm:bottom-auto sm:right-auto sm:top-2 sm:left-2 flex flex-col sm:flex-row items-center sm:items-start gap-2 p-2 bg-[#1e293b]/95 sm:bg-[#1e293b]/80 shadow-2xl sm:shadow-xl backdrop-blur-md sm:rounded-xl border-t sm:border border-white/10 z-50">
         <div className="flex w-full sm:w-auto items-center sm:items-start gap-3 sm:flex-col">
           <div className="flex items-center gap-2">
@@ -268,8 +330,8 @@ export default function Canvas({ imageUrl, onStateChange }: CanvasProps) {
               <button
                 onClick={() => setCurrentTool('brush')}
                 className={`p-2 rounded-lg transition-all ${
-                  currentTool === 'brush' 
-                    ? 'bg-violet-500/90 text-white shadow-lg shadow-violet-500/20' 
+                  currentTool === 'brush'
+                    ? 'bg-violet-500/90 text-white shadow-lg shadow-violet-500/20'
                     : 'bg-white/5 text-white/80 hover:bg-white/10 hover:text-white border border-white/10 hover:border-white/20'
                 }`}
                 title="Brush Tool"
@@ -279,8 +341,8 @@ export default function Canvas({ imageUrl, onStateChange }: CanvasProps) {
               <button
                 onClick={() => setCurrentTool('bucket')}
                 className={`p-2 rounded-lg transition-all ${
-                  currentTool === 'bucket' 
-                    ? 'bg-violet-500/90 text-white shadow-lg shadow-violet-500/20' 
+                  currentTool === 'bucket'
+                    ? 'bg-violet-500/90 text-white shadow-lg shadow-violet-500/20'
                     : 'bg-white/5 text-white/80 hover:bg-white/10 hover:text-white border border-white/10 hover:border-white/20'
                 }`}
                 title="Fill Tool"
@@ -322,8 +384,8 @@ export default function Canvas({ imageUrl, onStateChange }: CanvasProps) {
           <button
             onClick={() => setCurrentTool('brush')}
             className={`p-2 rounded-lg transition-all ${
-              currentTool === 'brush' 
-                ? 'bg-violet-500/90 text-white shadow-lg shadow-violet-500/20' 
+              currentTool === 'brush'
+                ? 'bg-violet-500/90 text-white shadow-lg shadow-violet-500/20'
                 : 'bg-white/5 text-white/80 hover:bg-white/10 hover:text-white border border-white/10 hover:border-white/20'
             }`}
             title="Brush Tool"
@@ -333,8 +395,8 @@ export default function Canvas({ imageUrl, onStateChange }: CanvasProps) {
           <button
             onClick={() => setCurrentTool('bucket')}
             className={`p-2 rounded-lg transition-all ${
-              currentTool === 'bucket' 
-                ? 'bg-violet-500/90 text-white shadow-lg shadow-violet-500/20' 
+              currentTool === 'bucket'
+                ? 'bg-violet-500/90 text-white shadow-lg shadow-violet-500/20'
                 : 'bg-white/5 text-white/80 hover:bg-white/10 hover:text-white border border-white/10 hover:border-white/20'
             }`}
             title="Fill Tool"

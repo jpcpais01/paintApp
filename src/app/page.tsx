@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import Canvas from '@/components/Canvas';
 
 export default function Home() {
   const [selectedImage, setSelectedImage] = useState<string>('');
-  const [history, setHistory] = useState<string[]>([]);
-  const [currentHistoryIndex, setCurrentHistoryIndex] = useState(-1);
-  const [currentTool, setCurrentTool] = useState<string>('');
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [currentTool, setCurrentTool] = useState<'brush' | 'bucket'>('brush');
+  const downloadRef = useRef<string>(selectedImage);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -16,8 +17,7 @@ export default function Home() {
       reader.onload = (e) => {
         const newImage = e.target?.result as string;
         setSelectedImage(newImage);
-        setHistory([newImage]);
-        setCurrentHistoryIndex(0);
+        downloadRef.current = newImage;
       };
       reader.readAsDataURL(file);
     }
@@ -25,36 +25,36 @@ export default function Home() {
 
   const handleNewImage = () => {
     setSelectedImage('');
-    setHistory([]);
-    setCurrentHistoryIndex(-1);
+    downloadRef.current = '';
+    setCanUndo(false);
+    setCanRedo(false);
   };
 
-  const handleSaveState = useCallback((canvasState: string) => {
-    setHistory(prevHistory => {
-      const newHistory = prevHistory.slice(0, currentHistoryIndex + 1);
-      return [...newHistory, canvasState];
-    });
-    setCurrentHistoryIndex(prevIndex => prevIndex + 1);
-  }, [currentHistoryIndex]);
+  const handleHistoryChange = useCallback((canUndo: boolean, canRedo: boolean) => {
+    setCanUndo(canUndo);
+    setCanRedo(canRedo);
+  }, []);
+
+  const handleStateChange = useCallback((newState: string) => {
+    downloadRef.current = newState;
+  }, []);
 
   const handleUndo = useCallback(() => {
-    if (currentHistoryIndex > 0) {
-      setCurrentHistoryIndex(prevIndex => prevIndex - 1);
-      setSelectedImage(history[currentHistoryIndex - 1]);
+    if (window.handleUndo) {
+      window.handleUndo();
     }
-  }, [currentHistoryIndex, history]);
+  }, []);
 
   const handleRedo = useCallback(() => {
-    if (currentHistoryIndex < history.length - 1) {
-      setCurrentHistoryIndex(prevIndex => prevIndex + 1);
-      setSelectedImage(history[currentHistoryIndex + 1]);
+    if (window.handleRedo) {
+      window.handleRedo();
     }
-  }, [currentHistoryIndex, history]);
+  }, []);
 
   const handleDownload = () => {
     const link = document.createElement('a');
     link.download = 'colored-image.png';
-    link.href = selectedImage;
+    link.href = downloadRef.current;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -73,7 +73,7 @@ export default function Home() {
                 <>
                   <button
                     onClick={handleUndo}
-                    disabled={currentHistoryIndex <= 0}
+                    disabled={!canUndo}
                     className="w-[22%] px-1 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs sm:text-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed whitespace-nowrap overflow-hidden text-ellipsis text-white/80 hover:text-white hover:border-white/20 disabled:hover:border-white/10 disabled:hover:bg-white/5 disabled:hover:text-white/80"
                     title="Undo"
                   >
@@ -81,7 +81,7 @@ export default function Home() {
                   </button>
                   <button
                     onClick={handleRedo}
-                    disabled={currentHistoryIndex >= history.length - 1}
+                    disabled={!canRedo}
                     className="w-[22%] px-1 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs sm:text-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed whitespace-nowrap overflow-hidden text-ellipsis text-white/80 hover:text-white hover:border-white/20 disabled:hover:border-white/10 disabled:hover:bg-white/5 disabled:hover:text-white/80"
                     title="Redo"
                   >
@@ -144,7 +144,8 @@ export default function Home() {
               <div className="p-3">
                 <Canvas 
                   imageUrl={selectedImage} 
-                  onStateChange={handleSaveState}
+                  onStateChange={handleStateChange}
+                  onHistoryChange={handleHistoryChange}
                 />
               </div>
             </div>
